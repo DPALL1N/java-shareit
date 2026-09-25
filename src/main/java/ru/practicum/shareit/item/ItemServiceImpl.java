@@ -46,7 +46,7 @@ public class ItemServiceImpl implements ItemService {
     public ItemDto findById(Long itemId) {
         return itemRepository.findById(itemId)
                 .map(ItemMapper::mapToItemDto)
-                .orElseThrow(() -> new NotFoundException("Вещь с ID: " + itemId + "не найдена"));
+                .orElseThrow(() -> new NotFoundException("Вещь с ID: " + itemId + " не найдена"));
     }
 
     @Override
