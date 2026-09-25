@@ -91,12 +91,6 @@ class ShareItTests {
 
     @Test
     void shouldRejectInvalidItemOperations() {
-        CreateItemRequest invalid = new CreateItemRequest();
-        invalid.setName("");
-        invalid.setDescription("Описание");
-        invalid.setAvailable(true);
-
-        assertThrows(RuntimeException.class, () -> itemService.create(1L, invalid));
         assertThrows(NotFoundException.class, () -> itemService.create(99L, validItem()));
         assertThrows(NotFoundException.class, () -> itemService.findById(99L));
     }

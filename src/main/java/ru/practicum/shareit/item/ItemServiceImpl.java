@@ -22,16 +22,8 @@ public class ItemServiceImpl implements ItemService {
 
     @Override
     public ItemDto create(Long userId, CreateItemRequest request) {
-        if (request.getName() == null || request.getName().isBlank()
-                || request.getDescription() == null
-                || request.getDescription().isBlank()
-                || request.getAvailable() == null) {
-            throw new ConditionsNotMetException(
-                    "Название, описание и доступность должны быть указаны");
-        }
-
         User owner = userRepository.findById(userId)
-                .orElseThrow(() -> new NotFoundException("Пользователь не найден"));
+                .orElseThrow(() -> new NotFoundException("Пользователь с ID: " + userId + " не найден"));
 
         Item item = ItemMapper.mapToItem(request, owner);
         item = itemRepository.save(item);
@@ -41,9 +33,9 @@ public class ItemServiceImpl implements ItemService {
     @Override
     public ItemDto update(Long userId, Long itemId, UpdateItemRequest request) {
         Item item = itemRepository.findById(itemId)
-                .orElseThrow(() -> new NotFoundException("Вещь не найдена"));
+                .orElseThrow(() -> new NotFoundException("Вещь с ID: " + itemId + " не найдена"));
         if (!item.getOwner().getId().equals(userId)) {
-            throw new NotFoundException("Вещь не найдена");
+            throw new ConditionsNotMetException("Пользователь не является владельцем вещи");
         }
         ItemMapper.updateItemFields(item, request);
         item = itemRepository.update(item);
