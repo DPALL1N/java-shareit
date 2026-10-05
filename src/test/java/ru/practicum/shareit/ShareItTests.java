@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
+import ru.practicum.shareit.booking.Booking;
 import ru.practicum.shareit.booking.BookingService;
 import ru.practicum.shareit.booking.BookingRepository;
 import ru.practicum.shareit.booking.BookingState;
@@ -178,12 +179,14 @@ class ShareItTests {
         BookingDto booking = bookingService.create(booker.getId(), request);
         assertEquals("WAITING", booking.getStatus());
         assertEquals("APPROVED", bookingService.approve(owner.getId(), booking.getId(), true).getStatus());
+        assertEquals(1, bookingService.findByBooker(booker.getId(), BookingState.FUTURE).size());
+        assertEquals(1, bookingService.findByOwner(owner.getId(), BookingState.FUTURE).size());
 
-        ru.practicum.shareit.booking.Booking completed =
-                bookingRepository.findById(booking.getId()).orElseThrow();
+        Booking completed = bookingRepository.findById(booking.getId()).orElseThrow();
         completed.setEnd(now.minusDays(1));
         bookingRepository.save(completed);
         assertEquals(1, bookingService.findByBooker(booker.getId(), BookingState.PAST).size());
+        assertEquals(1, bookingService.findByOwner(owner.getId(), BookingState.PAST).size());
 
         NewCommentRequest commentRequest = new NewCommentRequest();
         commentRequest.setText("Работает замечательно");
@@ -194,6 +197,7 @@ class ShareItTests {
         assertNotNull(ownerItem.getLastBooking());
         assertEquals(1, ownerItem.getComments().size());
         assertEquals(1, jpaItemService.findById(item.getId()).getComments().size());
+        assertEquals(1, jpaItemService.search("Дрель").getFirst().getComments().size());
     }
 
     private CreateItemRequest validItem() {

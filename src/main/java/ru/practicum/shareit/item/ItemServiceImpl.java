@@ -19,9 +19,11 @@ import ru.practicum.shareit.item.model.Item;
 import ru.practicum.shareit.user.User;
 import ru.practicum.shareit.user.UserRepository;
 
-import java.util.List;
-import java.util.stream.Collectors;
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional
@@ -78,9 +80,8 @@ public class ItemServiceImpl implements ItemService {
         if (userRepository.findById(userId).isEmpty()) {
             throw new NotFoundException("Пользователь с ID: " + userId + " не найден");
         }
-        return itemRepository.findByOwnerId(userId).stream()
-                .map(this::withBookingsAndComments)
-                .collect(Collectors.toList());
+        List<Item> items = itemRepository.findByOwnerId(userId);
+        return enrichItems(items, true);
     }
 
     @Override
@@ -88,10 +89,7 @@ public class ItemServiceImpl implements ItemService {
         if (text == null || text.isBlank()) {
             return List.of();
         }
-        return itemRepository.search(text)
-                .stream()
-                .map(this::withComments)
-                .collect(Collectors.toList());
+        return enrichItems(itemRepository.search(text), false);
     }
 
     @Override
@@ -105,51 +103,62 @@ public class ItemServiceImpl implements ItemService {
                 itemId, userId, BookingStatus.APPROVED, LocalDateTime.now())) {
             throw new BadRequestException("Оставить отзыв может только пользователь после завершения бронирования");
         }
-        Comment comment = new Comment();
-        comment.setText(request.getText());
-        comment.setItem(item);
-        comment.setAuthor(author);
-        comment.setCreated(LocalDateTime.now());
-        return toCommentDto(commentRepository.save(comment));
+        Comment comment = CommentMapper.toComment(request, item, author);
+        return CommentMapper.toCommentDto(commentRepository.save(comment));
     }
 
     private ItemDto withComments(Item item) {
         ItemDto dto = ItemMapper.mapToItemDto(item);
         if (commentRepository != null) {
             dto.setComments(commentRepository.findByItemIdOrderByCreatedDesc(item.getId()).stream()
-                    .map(this::toCommentDto)
+                    .map(CommentMapper::toCommentDto)
                     .toList());
         }
         return dto;
     }
 
-    private ItemDto withBookingsAndComments(Item item) {
-        ItemDto dto = withComments(item);
-        if (bookingRepository != null) {
-            LocalDateTime now = LocalDateTime.now();
-            bookingRepository.findByItemIdAndStatusAndEndBeforeOrderByEndDesc(
-                            item.getId(), BookingStatus.APPROVED, now).stream().findFirst()
-                    .ifPresent(booking -> dto.setLastBooking(toShortDto(booking)));
-            bookingRepository.findByItemIdAndStatusAndStartAfterOrderByStartAsc(
-                            item.getId(), BookingStatus.APPROVED, now).stream().findFirst()
-                    .ifPresent(booking -> dto.setNextBooking(toShortDto(booking)));
+    private List<ItemDto> enrichItems(List<Item> items, boolean includeBookings) {
+        if (items.isEmpty()) {
+            return List.of();
         }
+        List<Long> itemIds = items.stream().map(Item::getId).toList();
+        Map<Long, List<Booking>> bookingsByItem = includeBookings && bookingRepository != null
+                ? bookingRepository.findByItemIdInAndStatusOrderByStartDesc(itemIds, BookingStatus.APPROVED)
+                .stream()
+                .collect(Collectors.groupingBy(booking -> booking.getItem().getId()))
+                : Collections.emptyMap();
+        Map<Long, List<Comment>> commentsByItem = commentRepository == null
+                ? Collections.emptyMap()
+                : commentRepository.findByItemIdInOrderByCreatedDesc(itemIds).stream()
+                .collect(Collectors.groupingBy(comment -> comment.getItem().getId()));
+        LocalDateTime now = LocalDateTime.now();
+        return items.stream()
+                .map(item -> toItemDto(item,
+                        bookingsByItem.getOrDefault(item.getId(), List.of()),
+                        commentsByItem.getOrDefault(item.getId(), List.of()), now))
+                .toList();
+    }
+
+    private ItemDto toItemDto(Item item, List<Booking> bookings, List<Comment> comments, LocalDateTime now) {
+        ItemDto dto = ItemMapper.mapToItemDto(item);
+        dto.setComments(comments.stream().map(CommentMapper::toCommentDto).toList());
+        bookings.stream()
+                .filter(booking -> booking.getEnd().isBefore(now))
+                .max((first, second) -> first.getStart().compareTo(second.getStart()))
+                .map(this::toBookingShortDto)
+                .ifPresent(dto::setLastBooking);
+        bookings.stream()
+                .filter(booking -> booking.getStart().isAfter(now))
+                .min((first, second) -> first.getStart().compareTo(second.getStart()))
+                .map(this::toBookingShortDto)
+                .ifPresent(dto::setNextBooking);
         return dto;
     }
 
-    private BookingShortDto toShortDto(Booking booking) {
+    private BookingShortDto toBookingShortDto(Booking booking) {
         BookingShortDto dto = new BookingShortDto();
         dto.setId(booking.getId());
         dto.setBookerId(booking.getBooker().getId());
-        return dto;
-    }
-
-    private CommentDto toCommentDto(Comment comment) {
-        CommentDto dto = new CommentDto();
-        dto.setId(comment.getId());
-        dto.setText(comment.getText());
-        dto.setAuthorName(comment.getAuthor().getName());
-        dto.setCreated(comment.getCreated());
         return dto;
     }
 }
