@@ -1,0 +1,249 @@
+package ru.practicum.shareit;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
+import ru.practicum.shareit.booking.Booking;
+import ru.practicum.shareit.booking.BookingService;
+import ru.practicum.shareit.booking.BookingRepository;
+import ru.practicum.shareit.booking.BookingState;
+import ru.practicum.shareit.booking.dto.BookingDto;
+import ru.practicum.shareit.booking.dto.CreateBookingRequest;
+import ru.practicum.shareit.exception.DuplicatedDataException;
+import ru.practicum.shareit.exception.NotFoundException;
+import ru.practicum.shareit.item.ItemMapper;
+import ru.practicum.shareit.item.ItemRepositoryImpl;
+import ru.practicum.shareit.item.ItemService;
+import ru.practicum.shareit.item.ItemServiceImpl;
+import ru.practicum.shareit.item.dto.CommentDto;
+import ru.practicum.shareit.item.dto.CreateItemRequest;
+import ru.practicum.shareit.item.dto.ItemDto;
+import ru.practicum.shareit.item.dto.NewCommentRequest;
+import ru.practicum.shareit.item.dto.UpdateItemRequest;
+import ru.practicum.shareit.item.model.Item;
+import ru.practicum.shareit.request.ItemRequestService;
+import ru.practicum.shareit.request.dto.ItemRequestDto;
+import ru.practicum.shareit.user.User;
+import ru.practicum.shareit.user.UserJpaRepository;
+import ru.practicum.shareit.user.UserRepositoryImpl;
+import ru.practicum.shareit.user.UserServiceImpl;
+import ru.practicum.shareit.user.dto.NewUserRequest;
+import ru.practicum.shareit.user.dto.UpdateUserRequest;
+
+import java.time.LocalDateTime;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+@SpringBootTest
+class ShareItTests {
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private UserJpaRepository jpaUserRepository;
+
+    @Autowired
+    private ItemService jpaItemService;
+
+    @Autowired
+    private BookingService bookingService;
+
+    @Autowired
+    private BookingRepository bookingRepository;
+
+    @Autowired
+    private ItemRequestService itemRequestService;
+
+    private UserRepositoryImpl userRepository;
+    private UserServiceImpl userService;
+    private ItemServiceImpl itemService;
+
+    @BeforeEach
+    void setUp() {
+        userRepository = new UserRepositoryImpl();
+        userService = new UserServiceImpl(userRepository);
+        itemService = new ItemServiceImpl(new ItemRepositoryImpl(), userRepository);
+
+        User owner = new User();
+        owner.setName("Owner");
+        owner.setEmail("owner@yandex.ru");
+        userRepository.save(owner);
+    }
+
+    @Test
+    void shouldCreateUpdateGetAndDeleteUser() {
+        NewUserRequest create = new NewUserRequest();
+        create.setName("Ivan");
+        create.setEmail("ivan@yandex.ru");
+
+        assertEquals("Ivan", userService.createUser(create).getName());
+
+        UpdateUserRequest update = new UpdateUserRequest();
+        update.setName("Petr");
+        update.setEmail("petr@yandex.ru");
+        assertEquals("Petr", userService.updateUser(2L, update).getName());
+
+        assertEquals(2, userService.getUsers().size());
+        assertEquals("Petr", userService.getUserById(2L).getName());
+
+        userService.deleteUser(2L);
+        assertThrows(NotFoundException.class, () -> userService.getUserById(2L));
+    }
+
+    @Test
+    void shouldRejectDuplicateUserEmail() {
+        NewUserRequest request = new NewUserRequest();
+        request.setEmail("duplicate@yandex.ru");
+        userService.createUser(request);
+
+        NewUserRequest duplicate = new NewUserRequest();
+        duplicate.setEmail("duplicate@yandex.ru");
+
+        assertThrows(DuplicatedDataException.class,
+                () -> userService.createUser(duplicate));
+    }
+
+    @Test
+    void shouldCreateUpdateAndSearchItem() {
+        CreateItemRequest create = new CreateItemRequest();
+        create.setName("Дрель");
+        create.setDescription("Мощная");
+        create.setAvailable(true);
+
+        ItemDto item = itemService.create(1L, create);
+        assertEquals("Дрель", item.getName());
+        assertEquals(true, item.getAvailable());
+        assertEquals(1, itemService.search("ДРЕЛЬ").size());
+
+        UpdateItemRequest update = new UpdateItemRequest();
+        update.setName("Молоток");
+        update.setAvailable(false);
+        assertEquals("Молоток", itemService.update(1L, 1L, update).getName());
+        assertEquals(0, itemService.search("молоток").size());
+    }
+
+    @Test
+    void shouldRejectInvalidItemOperations() {
+        assertThrows(NotFoundException.class, () -> itemService.create(99L, validItem()));
+        assertThrows(NotFoundException.class, () -> itemService.findById(99L));
+    }
+
+    @Test
+    void shouldMapItemAndUpdateFields() {
+        User owner = userRepository.findById(1L).orElseThrow();
+        Item item = ItemMapper.mapToItem(validItem(), owner);
+        item.setId(1L);
+
+        ItemDto dto = ItemMapper.mapToItemDto(item);
+        assertEquals("Дрель", dto.getName());
+        assertEquals(1L, dto.getOwnerId());
+
+        UpdateItemRequest update = new UpdateItemRequest();
+        update.setAvailable(false);
+        ItemMapper.updateItemFields(item, update);
+        assertEquals(false, item.getAvailable());
+    }
+
+    @Test
+    void schemaCreatesRequiredTables() {
+        assertEquals(0, jdbcTemplate.queryForObject("select count(*) from users", Integer.class));
+        assertEquals(0, jdbcTemplate.queryForObject("select count(*) from items", Integer.class));
+        assertEquals(0, jdbcTemplate.queryForObject("select count(*) from bookings", Integer.class));
+        assertEquals(0, jdbcTemplate.queryForObject("select count(*) from comments", Integer.class));
+    }
+
+    @Test
+    @Transactional
+    void bookingAndCompletedRentalCommentPersistAndAppearOnItems() {
+        User owner = new User();
+        owner.setName("Owner");
+        owner.setEmail("owner-" + System.nanoTime() + "@yandex.ru");
+        owner = jpaUserRepository.save(owner);
+
+        User booker = new User();
+        booker.setName("Booker");
+        booker.setEmail("booker-" + System.nanoTime() + "@yandex.ru");
+        booker = jpaUserRepository.save(booker);
+
+        CreateItemRequest itemRequest = new CreateItemRequest();
+        itemRequest.setName("Дрель");
+        itemRequest.setDescription("Мощная дрель");
+        itemRequest.setAvailable(true);
+        ItemDto item = jpaItemService.create(owner.getId(), itemRequest);
+
+        LocalDateTime now = LocalDateTime.now();
+        CreateBookingRequest request = new CreateBookingRequest();
+        request.setItemId(item.getId());
+        request.setStart(now.plusDays(1));
+        request.setEnd(now.plusDays(2));
+        BookingDto booking = bookingService.create(booker.getId(), request);
+        assertEquals("WAITING", booking.getStatus());
+        assertEquals("APPROVED", bookingService.approve(owner.getId(), booking.getId(), true).getStatus());
+        assertEquals(1, bookingService.findByBooker(booker.getId(), BookingState.FUTURE).size());
+        assertEquals(1, bookingService.findByOwner(owner.getId(), BookingState.FUTURE).size());
+
+        Booking completed = bookingRepository.findById(booking.getId()).orElseThrow();
+        completed.setEnd(now.minusDays(1));
+        bookingRepository.save(completed);
+        assertEquals(1, bookingService.findByBooker(booker.getId(), BookingState.PAST).size());
+        assertEquals(1, bookingService.findByOwner(owner.getId(), BookingState.PAST).size());
+
+        NewCommentRequest commentRequest = new NewCommentRequest();
+        commentRequest.setText("Работает замечательно");
+        CommentDto comment = jpaItemService.createComment(booker.getId(), item.getId(), commentRequest);
+        assertEquals("Booker", comment.getAuthorName());
+
+        ItemDto ownerItem = jpaItemService.findAllByOwner(owner.getId()).getFirst();
+        assertNotNull(ownerItem.getLastBooking());
+        assertEquals(1, ownerItem.getComments().size());
+        assertEquals(1, jpaItemService.findById(item.getId()).getComments().size());
+        assertEquals(1, jpaItemService.search("Дрель").getFirst().getComments().size());
+    }
+
+    @Test
+    @Transactional
+    void itemRequestsCanBeCreatedListedAndAnsweredWithItems() {
+        User requestor = saveUser("requestor");
+        User owner = saveUser("responder");
+        User otherUser = saveUser("other");
+
+        ItemRequestDto request = itemRequestService.create(requestor.getId(), "Нужна дрель");
+        ItemRequestDto newerRequest = itemRequestService.create(requestor.getId(), "Нужна пила");
+
+        CreateItemRequest createItem = validItem();
+        createItem.setRequestId(request.getId());
+        ItemDto item = jpaItemService.create(owner.getId(), createItem);
+
+        assertEquals(request.getId(), item.getRequestId());
+        assertEquals(2, itemRequestService.findByRequestor(requestor.getId()).size());
+        assertEquals(newerRequest.getId(),
+                itemRequestService.findByRequestor(requestor.getId()).getFirst().getId());
+        assertEquals(1, itemRequestService.findById(request.getId()).getItems().size());
+        assertEquals(item.getId(), itemRequestService.findById(request.getId()).getItems().getFirst().getId());
+        assertEquals(2, itemRequestService.findAll(otherUser.getId(), 0, 10).size());
+        assertEquals(item.getId(), itemRequestService.findAll(otherUser.getId(), 0, 10)
+                .get(1).getItems().getFirst().getId());
+        assertEquals(1, itemRequestService.findAll(owner.getId(), 0, 1).size());
+        assertEquals(0, itemRequestService.findAll(requestor.getId(), 0, 10).size());
+    }
+
+    private User saveUser(String prefix) {
+        User user = new User();
+        user.setName(prefix);
+        user.setEmail(prefix + "-" + System.nanoTime() + "@yandex.ru");
+        return jpaUserRepository.save(user);
+    }
+
+    private CreateItemRequest validItem() {
+        CreateItemRequest request = new CreateItemRequest();
+        request.setName("Дрель");
+        request.setDescription("Мощная");
+        request.setAvailable(true);
+        return request;
+    }
+}
