@@ -10,11 +10,15 @@ import ru.practicum.shareit.booking.Booking;
 import ru.practicum.shareit.booking.BookingService;
 import ru.practicum.shareit.booking.BookingRepository;
 import ru.practicum.shareit.booking.BookingState;
+import ru.practicum.shareit.booking.BookingStatus;
 import ru.practicum.shareit.booking.dto.BookingDto;
 import ru.practicum.shareit.booking.dto.CreateBookingRequest;
+import ru.practicum.shareit.exception.BadRequestException;
+import ru.practicum.shareit.exception.ConditionsNotMetException;
 import ru.practicum.shareit.exception.DuplicatedDataException;
 import ru.practicum.shareit.exception.NotFoundException;
 import ru.practicum.shareit.item.ItemMapper;
+import ru.practicum.shareit.item.ItemJpaRepository;
 import ru.practicum.shareit.item.ItemRepositoryImpl;
 import ru.practicum.shareit.item.ItemService;
 import ru.practicum.shareit.item.ItemServiceImpl;
@@ -34,10 +38,12 @@ import ru.practicum.shareit.user.dto.NewUserRequest;
 import ru.practicum.shareit.user.dto.UpdateUserRequest;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
 class ShareItTests {
@@ -51,6 +57,9 @@ class ShareItTests {
     private ItemService jpaItemService;
 
     @Autowired
+    private ItemJpaRepository jpaItemRepository;
+
+    @Autowired
     private BookingService bookingService;
 
     @Autowired
@@ -61,13 +70,15 @@ class ShareItTests {
 
     private UserRepositoryImpl userRepository;
     private UserServiceImpl userService;
+    private ItemRepositoryImpl itemRepository;
     private ItemServiceImpl itemService;
 
     @BeforeEach
     void setUp() {
         userRepository = new UserRepositoryImpl();
         userService = new UserServiceImpl(userRepository);
-        itemService = new ItemServiceImpl(new ItemRepositoryImpl(), userRepository);
+        itemRepository = new ItemRepositoryImpl();
+        itemService = new ItemServiceImpl(itemRepository, userRepository);
 
         User owner = new User();
         owner.setName("Owner");
@@ -128,6 +139,33 @@ class ShareItTests {
     }
 
     @Test
+    void inMemoryItemRepositoryFiltersByOwnerAvailabilityAndBothSearchFields() {
+        User owner = userRepository.findById(1L).orElseThrow();
+
+        Item nameMatch = testItem("Дрель аккумуляторная", "Инструмент", true, owner);
+        Item descriptionMatch = testItem("Пила", "Дрель пригодится при ремонте", true, owner);
+        Item unavailableMatch = testItem("Дрель запасная", "Инструмент", false, owner);
+        Item unownedMatch = testItem("Дрель", null, true, null);
+        Item nullName = testItem(null, "Запасная дрель", true, owner);
+        Item nullDescription = testItem("Молоток", null, true, owner);
+        itemRepository.save(nameMatch);
+        itemRepository.save(descriptionMatch);
+        itemRepository.save(unavailableMatch);
+        itemRepository.save(unownedMatch);
+        itemRepository.save(nullName);
+        itemRepository.save(nullDescription);
+
+        assertEquals(6, itemRepository.findAll().size());
+        assertEquals(5, itemRepository.findByOwnerId(owner.getId()).size());
+        List<Item> searchResults = itemRepository.search("ДРЕЛЬ");
+        assertTrue(searchResults.contains(nameMatch));
+        assertTrue(searchResults.contains(descriptionMatch));
+        assertTrue(searchResults.contains(unownedMatch));
+        assertTrue(searchResults.contains(nullName));
+        assertEquals(4, searchResults.size());
+    }
+
+    @Test
     void shouldRejectInvalidItemOperations() {
         assertThrows(NotFoundException.class, () -> itemService.create(99L, validItem()));
         assertThrows(NotFoundException.class, () -> itemService.findById(99L));
@@ -147,6 +185,13 @@ class ShareItTests {
         update.setAvailable(false);
         ItemMapper.updateItemFields(item, update);
         assertEquals(false, item.getAvailable());
+
+        UpdateItemRequest blankUpdate = new UpdateItemRequest();
+        blankUpdate.setName(" ");
+        blankUpdate.setDescription(" ");
+        ItemMapper.updateItemFields(item, blankUpdate);
+        assertEquals("Дрель", item.getName());
+        assertEquals("Мощная", item.getDescription());
     }
 
     @Test
@@ -169,20 +214,40 @@ class ShareItTests {
         booker.setName("Booker");
         booker.setEmail("booker-" + System.nanoTime() + "@yandex.ru");
         booker = jpaUserRepository.save(booker);
+        long ownerId = owner.getId();
+        long bookerId = booker.getId();
 
         CreateItemRequest itemRequest = new CreateItemRequest();
         itemRequest.setName("Дрель");
         itemRequest.setDescription("Мощная дрель");
         itemRequest.setAvailable(true);
         ItemDto item = jpaItemService.create(owner.getId(), itemRequest);
+        Item persistedItem = jpaItemRepository.findById(item.getId()).orElseThrow();
 
         LocalDateTime now = LocalDateTime.now();
         CreateBookingRequest request = new CreateBookingRequest();
         request.setItemId(item.getId());
         request.setStart(now.plusDays(1));
         request.setEnd(now.plusDays(2));
-        BookingDto booking = bookingService.create(booker.getId(), request);
+
+        CreateBookingRequest invalidDates = new CreateBookingRequest();
+        invalidDates.setItemId(item.getId());
+        invalidDates.setStart(now.plusDays(2));
+        invalidDates.setEnd(now.plusDays(1));
+        assertThrows(BadRequestException.class, () -> bookingService.create(bookerId, invalidDates));
+        assertThrows(ConditionsNotMetException.class, () -> bookingService.create(ownerId, request));
+        persistedItem.setAvailable(false);
+        jpaItemRepository.save(persistedItem);
+        assertThrows(BadRequestException.class, () -> bookingService.create(bookerId, request));
+        persistedItem.setAvailable(true);
+        jpaItemRepository.save(persistedItem);
+
+        BookingDto booking = bookingService.create(bookerId, request);
         assertEquals("WAITING", booking.getStatus());
+        assertThrows(ConditionsNotMetException.class,
+                () -> bookingService.approve(bookerId, booking.getId(), true));
+        assertThrows(ConditionsNotMetException.class,
+                () -> bookingService.findById(ownerId + 100, booking.getId()));
         assertEquals("APPROVED", bookingService.approve(owner.getId(), booking.getId(), true).getStatus());
         assertEquals(1, bookingService.findByBooker(booker.getId(), BookingState.FUTURE).size());
         assertEquals(1, bookingService.findByOwner(owner.getId(), BookingState.FUTURE).size());
@@ -190,8 +255,12 @@ class ShareItTests {
         Booking completed = bookingRepository.findById(booking.getId()).orElseThrow();
         completed.setEnd(now.minusDays(1));
         bookingRepository.save(completed);
-        assertEquals(1, bookingService.findByBooker(booker.getId(), BookingState.PAST).size());
-        assertEquals(1, bookingService.findByOwner(owner.getId(), BookingState.PAST).size());
+        Booking olderCompleted = approvedBooking(persistedItem, booker, now.minusDays(4), now.minusDays(3));
+        bookingRepository.save(olderCompleted);
+        Booking upcoming = approvedBooking(persistedItem, booker, now.plusDays(3), now.plusDays(4));
+        bookingRepository.save(upcoming);
+        assertEquals(2, bookingService.findByBooker(booker.getId(), BookingState.PAST).size());
+        assertEquals(2, bookingService.findByOwner(owner.getId(), BookingState.PAST).size());
 
         NewCommentRequest commentRequest = new NewCommentRequest();
         commentRequest.setText("Работает замечательно");
@@ -200,6 +269,8 @@ class ShareItTests {
 
         ItemDto ownerItem = jpaItemService.findAllByOwner(owner.getId()).getFirst();
         assertNotNull(ownerItem.getLastBooking());
+        assertEquals(booking.getId(), ownerItem.getLastBooking().getId());
+        assertEquals(booking.getId(), ownerItem.getNextBooking().getId());
         assertEquals(1, ownerItem.getComments().size());
         assertEquals(1, jpaItemService.findById(item.getId()).getComments().size());
         assertEquals(1, jpaItemService.search("Дрель").getFirst().getComments().size());
@@ -245,5 +316,24 @@ class ShareItTests {
         request.setDescription("Мощная");
         request.setAvailable(true);
         return request;
+    }
+
+    private Item testItem(String name, String description, boolean available, User owner) {
+        Item item = new Item();
+        item.setName(name);
+        item.setDescription(description);
+        item.setAvailable(available);
+        item.setOwner(owner);
+        return item;
+    }
+
+    private Booking approvedBooking(Item item, User booker, LocalDateTime start, LocalDateTime end) {
+        Booking booking = new Booking();
+        booking.setItem(item);
+        booking.setBooker(booker);
+        booking.setStart(start);
+        booking.setEnd(end);
+        booking.setStatus(BookingStatus.APPROVED);
+        return booking;
     }
 }
