@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 
 import jakarta.validation.constraints.Future;
 import jakarta.validation.constraints.FutureOrPresent;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -15,8 +16,14 @@ import lombok.NoArgsConstructor;
 public class BookItemRequestDto {
 	@Positive
 	private long itemId;
+	@NotNull
 	@FutureOrPresent
 	private LocalDateTime start;
+	@NotNull
 	@Future
 	private LocalDateTime end;
+
+	public boolean hasValidDateRange() {
+		return start.isBefore(end);
+	}
 }

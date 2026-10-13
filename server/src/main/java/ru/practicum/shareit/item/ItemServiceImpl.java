@@ -98,9 +98,6 @@ public class ItemServiceImpl implements ItemService {
 
     @Override
     public List<ItemDto> search(String text) {
-        if (text == null || text.isBlank()) {
-            return List.of();
-        }
         return enrichItems(itemRepository.search(text), false);
     }
 

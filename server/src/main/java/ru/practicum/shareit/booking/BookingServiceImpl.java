@@ -30,9 +30,6 @@ public class BookingServiceImpl implements BookingService {
                 .orElseThrow(() -> new NotFoundException("Пользователь с ID: " + bookerId + " не найден"));
         Item item = itemRepository.findById(request.getItemId())
                 .orElseThrow(() -> new NotFoundException("Вещь с ID: " + request.getItemId() + " не найдена"));
-        if (!request.getStart().isBefore(request.getEnd())) {
-            throw new BadRequestException("Дата начала бронирования должна быть раньше даты окончания");
-        }
         if (item.getOwner().getId().equals(bookerId)) {
             throw new ConditionsNotMetException("Нельзя бронировать собственную вещь");
         }

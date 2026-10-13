@@ -5,14 +5,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.practicum.shareit.exception.NotFoundException;
 import ru.practicum.shareit.item.ItemJpaRepository;
-import ru.practicum.shareit.item.dto.ItemDto;
-import ru.practicum.shareit.item.ItemMapper;
+import ru.practicum.shareit.item.model.Item;
 import ru.practicum.shareit.user.User;
 import ru.practicum.shareit.user.UserRepository;
 import ru.practicum.shareit.request.dto.ItemRequestDto;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional
@@ -30,7 +32,7 @@ public class ItemRequestServiceImpl implements ItemRequestService {
         request.setDescription(description);
         request.setRequestor(requestor);
         request.setCreated(LocalDateTime.now());
-        return toDto(requestRepository.save(request), true);
+        return ItemRequestMapper.toDto(requestRepository.save(request));
     }
 
     @Override
@@ -39,9 +41,7 @@ public class ItemRequestServiceImpl implements ItemRequestService {
         if (!userRepository.existsById(userId)) {
             throw new NotFoundException("Пользователь с ID: " + userId + " не найден");
         }
-        return requestRepository.findByRequestorIdOrderByCreatedDescIdDesc(userId).stream()
-                .map(request -> toDto(request, true))
-                .toList();
+        return toDtos(requestRepository.findByRequestorIdOrderByCreatedDescIdDesc(userId));
     }
 
     @Override
@@ -55,9 +55,7 @@ public class ItemRequestServiceImpl implements ItemRequestService {
             return List.of();
         }
         int to = (int) Math.min((long) from + size, requests.size());
-        return requests.subList(from, to).stream()
-                .map(request -> toDto(request, true))
-                .toList();
+        return toDtos(requests.subList(from, to));
     }
 
     @Override
@@ -65,23 +63,20 @@ public class ItemRequestServiceImpl implements ItemRequestService {
     public ItemRequestDto findById(Long requestId) {
         ItemRequest request = requestRepository.findById(requestId)
                 .orElseThrow(() -> new NotFoundException("Запрос с ID: " + requestId + " не найден"));
-        return toDto(request, true);
+        List<Item> items = itemRepository.findByRequestIdInOrderByIdAsc(List.of(request.getId()));
+        return ItemRequestMapper.toDto(request, items);
     }
 
-    private ItemRequestDto toDto(ItemRequest request, boolean includeItems) {
-        ItemRequestDto dto = new ItemRequestDto();
-        dto.setId(request.getId());
-        dto.setDescription(request.getDescription());
-        dto.setCreated(request.getCreated());
-        if (includeItems) {
-            List<ItemDto> items = itemRepository.findByRequestIdOrderByIdAsc(request.getId()).stream()
-                    .map(ItemMapper::mapToItemDto)
-                    .toList();
-            dto.setItems(items.stream()
-                    .map(item -> new ItemRequestDto.RequestItemDto(
-                            item.getId(), item.getName(), item.getOwnerId()))
-                    .toList());
+    private List<ItemRequestDto> toDtos(List<ItemRequest> requests) {
+        if (requests.isEmpty()) {
+            return List.of();
         }
-        return dto;
+        List<Long> requestIds = requests.stream().map(ItemRequest::getId).toList();
+        Map<Long, List<Item>> itemsByRequestId = itemRepository.findByRequestIdInOrderByIdAsc(requestIds).stream()
+                .collect(Collectors.groupingBy(Item::getRequestId));
+        return requests.stream()
+                .map(request -> ItemRequestMapper.toDto(request,
+                        itemsByRequestId.getOrDefault(request.getId(), Collections.emptyList())))
+                .toList();
     }
 }

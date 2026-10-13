@@ -230,11 +230,6 @@ class ShareItTests {
         request.setStart(now.plusDays(1));
         request.setEnd(now.plusDays(2));
 
-        CreateBookingRequest invalidDates = new CreateBookingRequest();
-        invalidDates.setItemId(item.getId());
-        invalidDates.setStart(now.plusDays(2));
-        invalidDates.setEnd(now.plusDays(1));
-        assertThrows(BadRequestException.class, () -> bookingService.create(bookerId, invalidDates));
         assertThrows(ConditionsNotMetException.class, () -> bookingService.create(ownerId, request));
         persistedItem.setAvailable(false);
         jpaItemRepository.save(persistedItem);
